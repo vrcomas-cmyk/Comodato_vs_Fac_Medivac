@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Comodatos MEDIVAC</title>
+<title>Comodatos PROTEC · Dashboard 360</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root{--bg:#0f1720;--panel:#16212e;--panel2:#1c2a3a;--line:#26384c;--txt:#e6edf3;--muted:#8aa0b6;--accent:#1f9d6b;--accent2:#2f81f7}
@@ -152,6 +152,13 @@ function fdate(v){ if(!v) return '—'; const s=String(v);
 const esCarrito = d => d[F.status]==='Complementario' || String(d[F.desc]).toUpperCase().includes('CARRO');
 const tipoEq = d => esCarrito(d) ? 'Carrito' : 'Canister';
 const sinFacturar = d => !esCarrito(d) && num(d[F.fact])===0;  // canister colocado sin venta
+function sinComodato(d){
+  const f = d['Sin comodato asignado'];
+  if (f!=null && String(f).trim()!=='') return ['sí','si'].includes(String(f).trim().toLowerCase());
+  return num(d[F.cant])===0 && num(d[F.fact])>0;   // factura sin comodato (datos sin la bandera)
+}
+const esCom = d => !sinComodato(d);                // comodato real (equipo colocado)
+const nCom  = rs => rs.filter(esCom).length;     // conteo de comodatos sin inflar
 
 /* ---------- carga vía Apps Script ---------- */
 function jsonp(url){return new Promise((res,rej)=>{const cb='__cb'+Math.random().toString(36).slice(2);
@@ -179,7 +186,7 @@ async function cargarSerie(){
 }
 
 /* ---------- estado ---------- */
-const st={view:'dir', q:'', status:'', tend:'', rent:'', equipo:'', recup:'', tipo:'', sort:F.razon, dir:1, cliente:''};
+const st={view:'dir', q:'', status:'', tend:'', rent:'', equipo:'', recup:'', tipo:'', comod:'', sort:F.razon, dir:1, cliente:''};
 let charts={};
 const distroy=()=>{Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}}); charts={};};
 function uniq(k){return [...new Set(DATA.map(d=>d[k]).filter(v=>v!=null&&v!==''))].sort();}
@@ -193,6 +200,8 @@ function applyFilters(rows){
     if(st.equipo && d[F.desc]!==st.equipo) return false;
     if(st.recup && d[F.recup]!==st.recup) return false;
     if(st.tipo && tipoEq(d)!==st.tipo) return false;
+    if(st.comod==='con' && sinComodato(d)) return false;
+    if(st.comod==='sin' && !sinComodato(d)) return false;
     return true;
   });
 }
@@ -226,11 +235,11 @@ function renderChips(){
   const add=(k,label,v)=>{ if(v) items.push(`<span class="chip" data-clear="${k}">${label}: <b>${v}</b> ✕</span>`); };
   add('cliente','Cliente',st.cliente); add('status','Status',st.status); add('tend','Tendencia',st.tend);
   add('rent','Rentabilidad',st.rent); add('equipo','Equipo',st.equipo); add('recup','Recuperable',st.recup);
-  add('tipo','Tipo',st.tipo); add('q','Buscar',st.q);
+  add('tipo','Tipo',st.tipo); add('comod','Comodato', st.comod==='con'?'Con':(st.comod==='sin'?'Sin':'')); add('q','Buscar',st.q);
   const box=document.getElementById('chips');
   box.innerHTML = items.length ? items.join('')+`<span class="chip clearall" data-clear="ALL">Limpiar todo</span>` : '<span class="muted" style="font-size:11px">Sin filtros · clic en cualquier fila para filtrar por ese cliente</span>';
   box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{const k=c.dataset.clear;
-    if(k==='ALL'){st.cliente=st.q=st.status=st.tend=st.rent=st.equipo=st.recup=st.tipo='';}
+    if(k==='ALL'){st.cliente=st.q=st.status=st.tend=st.rent=st.equipo=st.recup=st.tipo=st.comod='';}
     else st[k]='';
     render();});
 }
@@ -283,19 +292,19 @@ function renderDir(rows){
   const act=rows.filter(d=>d[F.status]==='Activo').length, rent=rows.filter(d=>d[F.rentable]==='Rentable').length;
   const carr=rows.filter(esCarrito).length, sf=rows.filter(sinFacturar).length;
   const k=[
-    kpiCard('Facturación total',fmtK(fact),rows.length+' comodatos'),
+    kpiCard('Facturación total',fmtK(fact),nCom(rows)+' comodatos'),
     kpiCard('Margen total',fmtK(marg),pct(marg,fact)+' sobre venta'),
     kpiCard('Inversión comodato',fmtK(inv),'ROI global '+(inv?(marg/inv).toFixed(1):0)+'x'),
     kpiCard('Ganancia neta',fmtK(marg-inv),'margen − inversión'),
     kpiCard('Clientes',cli,'únicos'),
-    kpiCard('% rentable',pct(rent,rows.length),rent+' rentables'),
+    kpiCard('% rentable',pct(rent,nCom(rows)),rent+' rentables'),
     kpiCard('Carritos',carr,'equipos habilitadores','tipo','Carrito'),
     kpiCard('Sin facturar',sf,'canisters por activar','status','Sin compra'),
   ].join('');
   const factStatus=sumBy(rows,F.status,F.fact);
   const rentCount=countBy(rows,F.rentable);
   // tabla dura: resumen por status
-  const stats={}; rows.forEach(d=>{const s=d[F.status]; (stats[s]=stats[s]||{n:0,inv:0,fac:0,mar:0}); stats[s].n++; stats[s].inv+=num(d[F.inv]); stats[s].fac+=num(d[F.fact]); stats[s].mar+=num(d[F.margen]);});
+  const stats={}; rows.forEach(d=>{const s=d[F.status]; (stats[s]=stats[s]||{n:0,inv:0,fac:0,mar:0}); if(esCom(d)) stats[s].n++; stats[s].inv+=num(d[F.inv]); stats[s].fac+=num(d[F.fact]); stats[s].mar+=num(d[F.margen]);});
   const stRows=Object.entries(stats).sort((a,b)=>b[1].fac-a[1].fac).map(([s,v])=>`<tr class="clicrow" data-fk="status" data-fv="${s}">
     <td>${pill(s)}</td><td class="num">${v.n}</td><td class="num">${fmt(v.inv)}</td><td class="num">${fmt(v.fac)}</td>
     <td class="num">${fmt(v.mar)}</td><td class="num">${roiCell(v.inv?v.mar/v.inv:0)}</td></tr>`);
@@ -372,7 +381,7 @@ function renderGer(rows){
     <td class="num">${d[F.cant]||0}</td><td class="num">${fmt(d[F.inv])}</td>
     <td>${fdate(d[F.umComod])||'—'}</td><td class="num">${d[F.diasComod]||'—'}</td><td class="acc">${d[F.accion]||''}</td></tr>`);
   // tabla dura por recuperabilidad
-  const rec={}; rows.forEach(d=>{const r=d[F.recup]; (rec[r]=rec[r]||{n:0,inv:0,mar:0}); rec[r].n++; rec[r].inv+=num(d[F.inv]); rec[r].mar+=num(d[F.margen]);});
+  const rec={}; rows.forEach(d=>{const r=d[F.recup]; (rec[r]=rec[r]||{n:0,inv:0,mar:0}); if(esCom(d)) rec[r].n++; rec[r].inv+=num(d[F.inv]); rec[r].mar+=num(d[F.margen]);});
   const recRows=Object.entries(rec).sort((a,b)=>b[1].inv-a[1].inv).map(([r,v])=>`<tr class="clicrow" data-fk="recup" data-fv="${r}"><td>${r}</td><td class="num">${v.n}</td><td class="num">${fmt(v.inv)}</td><td class="num">${fmt(v.mar)}</td></tr>`);
 
   document.getElementById('app').innerHTML=`
@@ -544,11 +553,12 @@ function buildFilters(){
     <select id="fTend"><option value="">Tendencia</option>${opts(F.tend)}</select>
     <select id="fRent"><option value="">Rentabilidad</option>${opts(F.rentable)}</select>
     <select id="fTipo"><option value="">Canister/Carrito</option><option>Canister</option><option>Carrito</option></select>
+    <select id="fComod"><option value="">Con/Sin comodato</option><option value="con">Con comodato</option><option value="sin">Sin comodato</option></select>
     ${st.view==='com'?`<select id="fEquipo"><option value="">Equipo</option>${opts(F.desc)}</select>`:''}
     ${st.view==='ger'?`<select id="fRecup"><option value="">Recuperable</option>${opts(F.recup)}</select>`:''}`;
   const q=document.getElementById('q'); q.value=st.q; q.oninput=e=>{st.q=e.target.value; renderChips(); refreshBody();};
   const setv=(id,k)=>{const e=document.getElementById(id); if(e){e.value=st[k]||''; e.onchange=ev=>{st[k]=ev.target.value; render();};}};
-  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fEquipo','equipo');setv('fRecup','recup');
+  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fComod','comod');setv('fEquipo','equipo');setv('fRecup','recup');
 }
 function refreshBody(){ const rows=applyFilters(DATA);
   if(st.view==='dir') renderDir(rows); else if(st.view==='ger') renderGer(rows); else renderCom(rows); }
