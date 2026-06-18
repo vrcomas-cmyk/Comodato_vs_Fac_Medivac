@@ -126,6 +126,7 @@ tbody tr{cursor:pointer}tr:hover td{background:#1a2937}
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbwNrUGxgquhRgKYt07GP1IL3FDZBpQ4XGdW1EdHkAzMRL9pShZbWrynoI2dIqbWrPt6Xg/exec';  // <-- PEGA AQUÍ la URL /exec de tu Apps Script. Si queda vacío, usa datos embebidos.
 const SHEET_TAB = 'v_seguimiento_360';
 const SERIE_TAB = 'v_direccion_tendencia';  // pestaña de la serie mensual
+const BOLSAS_TAB = 'v_bolsas_resumen';      // pestaña ranking por bolsa
 const REFRESH_MS = 300000;
 /* ================================ */
 
@@ -136,6 +137,7 @@ const F = {
   ultFact:'ultima_factura', ticket:'ticket_prom_mensual', margenMes:'margen_prom_mensual',
   roi:'roi', dias:'dias_sin_compra', tend:'tendencia', status:'status_actividad',
   rentable:'rentable', recup:'recuperable', accion:'accion_sugerida',
+  zona:'Zona', ejec:'Ejecutivo', grupo:'Grupo de cliente',
   umFact:'Ultimo mes de facturación', umFactCant:'Cantidad ultimo mes de facturación', umFactImp:'Importe facturación ultimo mes',
   pmFact:'Penultimo mes de facturación', pmFactCant:'Cantidad penultimo mes de facturación', pmFactImp:'Importe facturación Penultimo mes',
   mesesFact:'Cada cuantos meses se le factura',
@@ -147,6 +149,7 @@ const F = {
 
 let DATA = FALLBACK.slice();
 let SERIE = (typeof SERIE_FALLBACK!=='undefined'?SERIE_FALLBACK:[]).slice();
+let BOLSAS = [];
 const codToRazon = {}; const razonToCod = {};
 function buildMaps(){ DATA.forEach(d=>{ if(d[F.cliente]&&d[F.razon]){ codToRazon[d[F.cliente]]=d[F.razon]; razonToCod[d[F.razon]]=d[F.cliente]; } }); }
 const trend={cli:'', metric:'importe'};   // cli=''=General; metric: importe|bolsas
@@ -211,6 +214,9 @@ function applyFilters(rows){
     if(st.equipo && d[F.desc]!==st.equipo) return false;
     if(st.recup && d[F.recup]!==st.recup) return false;
     if(st.tipo && tipoEq(d)!==st.tipo) return false;
+    if(st.ejec && d[F.ejec]!==st.ejec) return false;
+    if(st.zona && fmtZona(d[F.zona])!==st.zona) return false;
+    if(st.grupo && d[F.grupo]!==st.grupo) return false;
     if(st.comod==='con' && sinComodato(d)) return false;
     if(st.comod==='sin' && !sinComodato(d)) return false;
     return true;
@@ -235,6 +241,7 @@ const baseOpt={maintainAspectRatio:false,plugins:{legend:{labels:{color:'#8aa0b6
 const axOpt={x:{ticks:{color:'#8aa0b6'},grid:{color:'#26384c'}},y:{ticks:{color:'#8aa0b6'},grid:{display:false}}};
 function kpiCard(l,v,d,fk,fv){return `<div class="kpi ${fk?'clic':''}" ${fk?`data-fk="${fk}" data-fv="${fv}"`:''}><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d||''}</div></div>`;}
 const esc = s => String(s==null?'':s).replace(/"/g,'&quot;');
+function fmtZona(v){ if(v==null||v==='') return ''; const t=String(v).trim(); return /^\d+$/.test(t)? t.padStart(3,'0') : t; }
 const DESC_STATUS = {
   'Activo':'Compró hace ≤45 días. Relación sana, seguimiento normal.',
   'En seguimiento':'46–90 días sin comprar. Consumo desacelerando: confirmar el próximo pedido.',
@@ -276,6 +283,7 @@ function renderChips(){
   add('cliente','Cliente',st.cliente); add('status','Status',st.status); add('tend','Tendencia',st.tend);
   add('rent','Rentabilidad',st.rent); add('equipo','Equipo',st.equipo); add('recup','Recuperable',st.recup);
   add('tipo','Tipo',st.tipo); add('comod','Comodato', st.comod==='con'?'Con':(st.comod==='sin'?'Sin':'')); add('q','Buscar',st.q);
+  add('ejec','Ejecutivo',st.ejec); add('zona','Zona',st.zona); add('grupo','Grupo',st.grupo);
   const box=document.getElementById('chips');
   box.innerHTML = items.length ? items.join('')+`<span class="chip clearall" data-clear="ALL">Limpiar todo</span>` : '<span class="muted" style="font-size:11px">Sin filtros · clic en cualquier fila para filtrar por ese cliente</span>';
   box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{const k=c.dataset.clear;
@@ -293,8 +301,23 @@ function dataTable(title, headers, rows, count){
 
 
 /* ---------- gráfica evolución mensual: Facturación vs Comodato ---------- */
-function serieAgg(cliCod, metric){
-  const rows = SERIE.filter(r=> !cliCod || String(r.cliente)===String(cliCod));
+function serieAgg(cliCod, metric, useFilter, equipoCod){
+  let keyset=null, cliset=null;
+  if(useFilter){
+    const ff=applyFilters(DATA);
+    keyset=new Set(ff.map(d=>String(d[F.cliente])+'|'+String(d[F.mat])));
+    cliset=new Set(ff.map(d=>String(d[F.cliente])));
+  }
+  const rows = SERIE.filter(r=>{
+    if(cliCod && String(r.cliente)!==String(cliCod)) return false;
+    if(equipoCod && String(r.codigo_equipo)!==String(equipoCod)) return false;
+    if(keyset){
+      const cod=r.codigo_equipo;
+      if(cod!=null && cod!==''){ if(!keyset.has(String(r.cliente)+'|'+String(cod))) return false; }
+      else { if(!cliset.has(String(r.cliente))) return false; }
+    }
+    return true;
+  });
   const m={};
   rows.forEach(r=>{
     const p=String(r.periodo||'').slice(0,7); if(!/^\d{4}-\d{2}$/.test(p)) return;
@@ -306,9 +329,9 @@ function serieAgg(cliCod, metric){
   return {labels, fac:labels.map(l=>m[l].fac), com:labels.map(l=>m[l].com)};
 }
 function lblMes(p){const[y,mo]=p.split('-');const ms=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];return ms[+mo-1]+' '+y.slice(2);}
-function drawTrend(canvasId, cliCod, metric, h){
+function drawTrend(canvasId, cliCod, metric, h, equipoCod){
   const c=document.getElementById(canvasId); if(!c) return null;
-  const a=serieAgg(cliCod, metric);
+  const a=serieAgg(cliCod, metric, (!cliCod && !equipoCod), equipoCod);  // General respeta filtros; cliente/canister específico no
   const facLbl = metric==='bolsas' ? 'Facturación (bolsas)' : 'Facturación ($)';
   return new Chart(c,{data:{labels:a.labels.map(lblMes),datasets:[
       {type:'line',label:facLbl,data:a.fac,borderColor:'#2f81f7',backgroundColor:'#2f81f7',yAxisID:'y',tension:.3,pointRadius:2,borderWidth:2,fill:false},
@@ -324,6 +347,69 @@ function drawTrend(canvasId, cliCod, metric, h){
       }}});
 }
 function updateTrend(){ if(charts.trend){try{charts.trend.destroy()}catch(e){}} charts.trend=drawTrend('trendCanvas',trend.cli,trend.metric); }
+
+
+function trendCardHTML(){return `
+    <div class="card trendcard">
+      <div class="trendhead">
+        <h3>📈 Evolución mensual — Facturación vs Comodato</h3>
+        <div class="trendctrl">
+          <select id="trendCli"></select>
+          <div class="seg"><button data-m="importe" class="segb">$ Importe</button><button data-m="bolsas" class="segb">Bolsas</button></div>
+        </div>
+      </div>
+      <div class="cb" style="height:300px"><canvas id="trendCanvas"></canvas></div>
+    </div>`;}
+function mountTrend(){
+  const tsel=document.getElementById('trendCli');
+  if(tsel){
+    const clientes=[...new Set(DATA.map(d=>d[F.razon]).filter(Boolean))].sort();
+    tsel.innerHTML='<option value="">General (todos los clientes)</option>'+clientes.map(n=>`<option ${razonToCod[n]===trend.cli?'selected':''}>${n}</option>`).join('');
+    tsel.onchange=e=>{ trend.cli = e.target.value? razonToCod[e.target.value]:''; updateTrend(); };
+  }
+  document.querySelectorAll('.segb').forEach(b=>{ b.classList.toggle('on',b.dataset.m===trend.metric);
+    b.onclick=()=>{ trend.metric=b.dataset.m; document.querySelectorAll('.segb').forEach(x=>x.classList.toggle('on',x.dataset.m===trend.metric)); updateTrend(); }; });
+  updateTrend();
+}
+/* tablas de ranking por equipo y por bolsa */
+function equipoTable(rows){
+  const m={};
+  rows.forEach(d=>{ const k=d[F.desc]||'—';
+    (m[k]=m[k]||{tipo:tipoEq(d),cod:d[F.mat],pzs:0,inv:0,bol:0,fac:0,mar:0,cli:new Set()});
+    m[k].pzs+=num(d[F.cant]); m[k].inv+=num(d[F.inv]); m[k].bol+=num(d[F.bolsas]);
+    m[k].fac+=num(d[F.fact]); m[k].mar+=num(d[F.margen]); m[k].cli.add(d[F.cliente]); });
+  const body=Object.entries(m).sort((a,b)=>b[1].mar-a[1].mar).map(([k,v])=>`<tr class="canrow" data-canister="${esc(k)}" data-cod="${esc(v.cod)}">
+    <td><b>${k}</b> <span class="tag ${v.tipo==='Carrito'?'tg':''}">${v.tipo}</span></td>
+    <td class="num">${v.cli.size}</td><td class="num">${v.pzs.toLocaleString('es-MX')}</td>
+    <td class="num">${fmt(v.inv)}</td><td class="num">${v.bol.toLocaleString('es-MX')}</td>
+    <td class="num">${fmt(v.fac)}</td><td class="num">${fmt(v.mar)}</td>
+    <td class="num">${roiCell(v.inv?v.mar/v.inv:0)}</td>
+    <td class="num">${v.fac?Math.round(v.mar/v.fac*100):0}%</td></tr>`);
+  return dataTable('🧪 Rentabilidad por canister / equipo (clic = clientes y bolsas)',
+    [{t:'Equipo'},{t:'Clientes',num:1},{t:'Piezas',num:1},{t:'Inversión',num:1},{t:'Bolsas',num:1},{t:'Facturación',num:1},{t:'Margen',num:1},{t:'ROI',num:1},{t:'%Margen',num:1}],
+    body, Object.keys(m).length+' equipos');
+}
+function bolsaTable(){
+  if(!BOLSAS.length){
+    return dataTable('💧 Facturación por bolsa (consumible)',
+      [{t:'Bolsa'},{t:'Importe',num:1}],
+      ['<tr><td colspan="2" class="muted" style="padding:14px">Conecta la pestaña <b>v_bolsas_resumen</b> para ver el ranking por bolsa.</td></tr>'],'—');
+  }
+  const k=BOLSAS[0];
+  const fImp=k.importe_vendido!==undefined?'importe_vendido':'Importe';
+  const s2=[...BOLSAS].sort((a,b)=>num(b.importe_vendido)-num(a.importe_vendido));
+  const body=s2.map(d=>`<tr>
+    <td><b>${d.descripcion_consumible||d.codigo_consumible||''}</b></td>
+    <td class="num">${num(d.num_clientes)}</td>
+    <td class="num">${num(d.bolsas_facturadas).toLocaleString('es-MX')}</td>
+    <td class="num">${fmt(d.importe_vendido)}</td>
+    <td class="num">${fmt(d.margen_total)}</td>
+    <td class="num">${num(d.pct_margen)}%</td>
+    <td class="num">${fmt(d.precio_prom_bolsa)}</td></tr>`);
+  return dataTable('💧 Facturación por bolsa (consumible) — qué bolsa se vende más',
+    [{t:'Bolsa'},{t:'Clientes',num:1},{t:'Bolsas',num:1},{t:'Importe',num:1},{t:'Margen',num:1},{t:'%Margen',num:1},{t:'Precio prom',num:1}],
+    body, BOLSAS.length+' bolsas');
+}
 
 /* =================== DIRECCIÓN =================== */
 function renderDir(rows){
@@ -357,6 +443,7 @@ function renderDir(rows){
 
   document.getElementById('app').innerHTML=`
     <div class="kpis k8">${k}</div>
+    ${equipoTable(rows)}
     <div class="card trendcard">
       <div class="trendhead">
         <h3>📈 Evolución mensual — Facturación vs Comodato</h3>
@@ -367,19 +454,32 @@ function renderDir(rows){
       </div>
       <div class="cb" style="height:300px"><canvas id="trendCanvas"></canvas></div>
     </div>
-    <div class="grid g3">
+    <div class="grid g2">
       <div class="card"><h3>Facturación por status <span class="hint">(clic filtra)</span></h3><div class="cb"><canvas id="c1"></canvas></div></div>
       <div class="card"><h3>Rentabilidad <span class="hint">(clic filtra)</span></h3><div class="cb"><canvas id="c2"></canvas></div></div>
-      <div class="card"><h3>Inversión vs Margen (burbuja=facturación)</h3><div class="cb"><canvas id="c3"></canvas></div></div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h3>🏷️ Facturación por grupo de cliente <span class="hint">(clic filtra)</span></h3><div class="cb" style="height:280px"><canvas id="cGrupo"></canvas></div></div>
+      <div class="card"><h3>Inversión vs Margen <span class="hint">(burbuja=facturación)</span></h3><div class="cb" style="height:280px"><canvas id="c3"></canvas></div></div>
     </div>
     ${dataTable('📌 Resumen por status (clic para filtrar)',[{t:'Status'},{t:'Comodatos',num:1},{t:'Inversión',num:1},{t:'Facturación',num:1},{t:'Margen',num:1},{t:'ROI',num:1}],stRows,Object.keys(stats).length+' grupos')}
-    ${dataTable('🏆 Top 15 clientes por facturación (clic = ficha)',[{t:'Cliente'},{t:'Equipos',num:1},{t:'Inversión',num:1},{t:'Facturación',num:1},{t:'Margen',num:1},{t:'ROI',num:1}],topRows,'15 clientes')}`;
+    ${dataTable('🏆 Top 15 clientes por facturación (clic = ficha)',[{t:'Cliente'},{t:'Equipos',num:1},{t:'Inversión',num:1},{t:'Facturación',num:1},{t:'Margen',num:1},{t:'ROI',num:1}],topRows,'15 clientes')}
+`;
   distroy();
   const factStatusKeys=Object.keys(factStatus);
-  charts.c1=new Chart(c1,{type:'doughnut',data:{labels:factStatusKeys,datasets:[{data:Object.values(factStatus),backgroundColor:factStatusKeys.map(x=>PAL[x]||'#5a6b7d'),borderColor:'#16212e',borderWidth:2}]},options:{...baseOpt,cutout:'60%',onClick:(e,el)=>{if(el[0]){st.status=factStatusKeys[el[0].index]; render();}},plugins:{legend:{position:'right',labels:baseOpt.plugins.legend.labels}}}});
+  charts.c1=new Chart(c1,{type:'doughnut',data:{labels:factStatusKeys,datasets:[{data:Object.values(factStatus),backgroundColor:factStatusKeys.map(x=>PAL[x]||'#5a6b7d'),borderColor:'#16212e',borderWidth:2}]},options:{...baseOpt,cutout:'60%',onClick:(e,el)=>{if(el[0]){const v=factStatusKeys[el[0].index]; st.status=(st.status===v?'':v); render();}},plugins:{legend:{position:'right',labels:baseOpt.plugins.legend.labels}}}});
   const rKeys=Object.keys(rentCount);
-  charts.c2=new Chart(c2,{type:'bar',data:{labels:rKeys,datasets:[{data:Object.values(rentCount),backgroundColor:rKeys.map(x=>RPAL[x]||'#5a6b7d')}]},options:{...baseOpt,indexAxis:'y',onClick:(e,el)=>{if(el[0]){st.rent=rKeys[el[0].index]; render();}},plugins:{legend:{display:false}},scales:axOpt}});
+  charts.c2=new Chart(c2,{type:'bar',data:{labels:rKeys,datasets:[{data:Object.values(rentCount),backgroundColor:rKeys.map(x=>RPAL[x]||'#5a6b7d')}]},options:{...baseOpt,indexAxis:'y',onClick:(e,el)=>{if(el[0]){const v=rKeys[el[0].index]; st.rent=(st.rent===v?'':v); render();}},plugins:{legend:{display:false}},scales:axOpt}});
   charts.c3=new Chart(c3,{type:'bubble',data:{datasets:Object.keys(PAL).map(s=>({label:s,backgroundColor:PAL[s]+'cc',data:rows.filter(d=>d[F.status]===s).map(d=>({x:num(d[F.inv]),y:num(d[F.margen]),r:Math.max(3,Math.sqrt(num(d[F.fact]))/120)}))}))},options:{...baseOpt,plugins:{legend:{labels:baseOpt.plugins.legend.labels}},scales:{x:{title:{display:true,text:'Inversión',color:'#8aa0b6'},ticks:{color:'#8aa0b6',callback:v=>fmtK(v)},grid:{color:'#26384c'}},y:{title:{display:true,text:'Margen',color:'#8aa0b6'},ticks:{color:'#8aa0b6',callback:v=>fmtK(v)},grid:{color:'#26384c'}}}}});
+  const grupoFac={}; rows.forEach(d=>{const g=d[F.grupo]; if(!g) return; grupoFac[g]=(grupoFac[g]||0)+num(d[F.fact]);});
+  const gKeys=Object.keys(grupoFac).sort((a,b)=>grupoFac[b]-grupoFac[a]);
+  const cG=document.getElementById('cGrupo');
+  if(cG && gKeys.length) charts.cGrupo=new Chart(cG,{type:'bar',
+    data:{labels:gKeys,datasets:[{label:'Facturación',data:gKeys.map(k=>grupoFac[k]),backgroundColor:'#2f81f7',borderRadius:4}]},
+    options:{...baseOpt,indexAxis:'y',
+      onClick:(e,el)=>{if(el[0]){const v=gKeys[el[0].index]; st.grupo=(st.grupo===v?'':v); render();}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+fmt(c.parsed.x)}}},
+      scales:axOpt}});
   // selector de cliente + segmentos para la gráfica de evolución
   const tsel=document.getElementById('trendCli');
   if(tsel){
@@ -431,6 +531,7 @@ function renderGer(rows){
       <div class="card"><h3>Inversión por estado de recuperación</h3><div class="cb"><canvas id="g1"></canvas></div></div>
       <div class="card"><h3>Frecuencia de facturación (meses)</h3><div class="cb"><canvas id="g2"></canvas></div></div>
     </div>
+    ${trendCardHTML()}
     ${dataTable('📊 Inversión y margen por recuperabilidad (clic filtra)',[{t:'Recuperable'},{t:'Comodatos',num:1},{t:'Inversión',num:1},{t:'Margen',num:1}],recRows,Object.keys(rec).length+' grupos')}
     ${dataTable('🔧 Recuperación de equipos — prioridad por ROI',[{t:'Cliente'},{t:'Equipo'},{t:'Pzs',num:1},{t:'Inversión',num:1},{t:'ROI',num:1},{t:'Margen',num:1},{t:'Días s/c',num:1},{t:'Recuperable'},{t:'Acción'}],recupTbl,recupTbl.length+' equipos')}
     ${dataTable('⚠️ Canisters colocados SIN facturar — activar 1er pedido',[{t:'Cliente'},{t:'Equipo'},{t:'Pzs',num:1},{t:'Inversión',num:1},{t:'Últ. entrega comod.'},{t:'Frec entrega (d)',num:1},{t:'Acción'}],sfTbl,sf.length+' canisters')}`;
@@ -439,6 +540,7 @@ function renderGer(rows){
   charts.g1=new Chart(g1,{type:'bar',data:{labels:irKeys,datasets:[{data:Object.values(invRecup),backgroundColor:irKeys.map((x,i)=>['#1f9d6b','#e0a325','#e0533d','#8aa0b6','#2f81f7'][i%5])}]},options:{...baseOpt,indexAxis:'y',onClick:(e,el)=>{if(el[0]){st.recup=irKeys[el[0].index]; render();}},plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#8aa0b6',callback:v=>fmtK(v)},grid:{color:'#26384c'}},y:{ticks:{color:'#8aa0b6',font:{size:9}},grid:{display:false}}}}});
   const fk=ord.filter(o=>freqF[o]);
   charts.g2=new Chart(g2,{type:'bar',data:{labels:fk,datasets:[{data:fk.map(o=>freqF[o]),backgroundColor:'#2f81f7'}]},options:{...baseOpt,plugins:{legend:{display:false}},scales:axOpt}});
+  mountTrend();
 }
 
 /* =================== COMERCIAL =================== */
@@ -450,9 +552,10 @@ function renderCom(rows){
     kpiCard('Sin facturar',rows.filter(sinFacturar).length,'por activar','status','Sin compra'),
   ].join('');
   const s=sortRows(rows);
-  const cols=[[ '',F.razon,'Cliente'],['',F.desc,'Equipo'],['',null,'Tipo'],['num',F.cant,'Pzs'],['num',F.fact,'Facturación'],['num',F.margen,'Margen'],['num',F.roi,'ROI'],['num',F.dias,'Días s/c'],['',F.tend,'Tendencia'],['',F.status,'Status'],['',F.umFact,'Últ.mes fact'],['num',F.umFactImp,'Imp.últ'],['',F.pmFact,'Penúlt.mes'],['num',F.pmFactImp,'Imp.penúlt'],['',F.ultFact,'Últ.factura'],['',F.umComod,'Últ.comodato'],['num',F.mesesFact,'Frec(m)'],['acc',F.accion,'Acción']];
+  const cols=[[ '',F.razon,'Cliente'],['',F.zona,'Zona'],['',F.grupo,'Grupo'],['',F.desc,'Equipo'],['',null,'Tipo'],['num',F.cant,'Pzs'],['num',F.fact,'Facturación'],['num',F.margen,'Margen'],['num',F.roi,'ROI'],['num',F.dias,'Días s/c'],['',F.tend,'Tendencia'],['',F.status,'Status'],['',F.umFact,'Últ.mes fact'],['num',F.umFactImp,'Imp.últ'],['',F.pmFact,'Penúlt.mes'],['num',F.pmFactImp,'Imp.penúlt'],['',F.ultFact,'Últ.factura'],['',F.umComod,'Últ.comodato'],['num',F.mesesFact,'Frec(m)'],['acc',F.accion,'Acción']];
   const body=s.map(d=>`<tr ${rowAttr(d)}>
       <td><b>${d[F.razon]||''}</b><br><span class="muted">${d[F.cliente]}</span></td>
+      <td>${fmtZona(d[F.zona])||'—'}</td><td>${d[F.grupo]||'—'}</td>
       <td>${d[F.desc]||''}</td><td><span class="tag ${esCarrito(d)?'tg':''}">${tipoEq(d)}</span></td>
       <td class="num">${d[F.cant]||0}</td><td class="num">${fmt(d[F.fact])}</td><td class="num">${fmt(d[F.margen])}</td>
       <td class="num">${roiCell(d[F.roi])}</td><td class="num">${d[F.dias]??''}</td>
@@ -466,11 +569,14 @@ function renderCom(rows){
     <div class="ficha card"><h3>🪪 Ficha de cliente</h3>
       <select id="selCli"><option value="">— Selecciona (o clic en una fila) —</option>${[...new Set(DATA.map(d=>d[F.razon]).filter(Boolean))].sort().map(n=>`<option ${st.cliente===n?'selected':''}>${n}</option>`).join('')}</select>
       <div id="fichaBody"></div></div>
+    ${trendCardHTML()}
     <div class="tablecard"><div class="top"><h3>📋 Seguimiento comercial — ordenado por cliente</h3><span class="count">${rows.length} registros · clic en fila = ficha</span></div>
       <div class="tbl"><table id="ctbl"><thead><tr>${cols.map(c=>`<th class="${c[0]==='num'?'num':''}" ${c[1]?`data-k="${c[1]}"`:''}>${c[2]}${c[1]?' ⇅':''}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div></div>`;
   document.querySelectorAll('#ctbl th[data-k]').forEach(th=>th.onclick=(ev)=>{ev.stopPropagation(); const kk=th.dataset.k; st.dir=(st.sort===kk)?-st.dir:1; st.sort=kk; render();});
   const sel=document.getElementById('selCli'); sel.onchange=e=>{st.cliente=e.target.value; render();};
   renderFicha();
+  if(st.cliente && razonToCod[st.cliente]) trend.cli = razonToCod[st.cliente];  // adaptado al cliente activo
+  mountTrend();
 }
 function renderFicha(){
   const b=document.getElementById('fichaBody'); if(!b) return;
@@ -521,10 +627,21 @@ function openModal(razon){
   const recs=DATA.filter(d=>d[F.razon]===razon);
   if(!recs.length) return;
   const tot=k=>recs.reduce((a,d)=>a+num(d[k]),0);
-  const umImp=tot(F.umFactImp), pmImp=tot(F.pmFactImp);
-  const umCant=tot(F.umFactCant), pmCant=tot(F.pmFactCant);
-  const umMes=recs.map(d=>d[F.umFact]).find(Boolean)||'—';
-  const pmMes=recs.map(d=>d[F.pmFact]).find(Boolean)||'—';
+  // Comparativo desde la serie mensual real (siempre ordenada: último = más reciente)
+  const _cli=recs[0][F.cliente];
+  const _si=serieAgg(_cli,'importe'), _sb=serieAgg(_cli,'bolsas');
+  const _lab=_si.labels, _L=_lab.length;
+  let umImp, pmImp, umCant, pmCant, umMes, pmMes;
+  if(_L>=1){
+    umMes=lblMes(_lab[_L-1]); pmMes=_L>=2?lblMes(_lab[_L-2]):'—';
+    umImp=_si.fac[_L-1];      pmImp=_L>=2?_si.fac[_L-2]:0;
+    umCant=_sb.fac[_L-1];     pmCant=_L>=2?_sb.fac[_L-2]:0;
+  } else {  // respaldo si la serie no está conectada
+    umImp=tot(F.umFactImp); pmImp=tot(F.pmFactImp);
+    umCant=tot(F.umFactCant); pmCant=tot(F.pmFactCant);
+    umMes=recs.map(d=>d[F.umFact]).find(Boolean)||'—';
+    pmMes=recs.map(d=>d[F.pmFact]).find(Boolean)||'—';
+  }
   const inv=tot(F.inv), fac=tot(F.fact), mar=tot(F.margen);
   const status=[...new Set(recs.map(d=>d[F.status]))];
   const carr=recs.filter(esCarrito).length, can=recs.length-carr;
@@ -546,7 +663,7 @@ function openModal(razon){
 
   document.getElementById('modalBody').innerHTML=`
     <div class="mhead">
-      <div><div class="mtitle">${razon}</div><div class="msub">Código ${recs[0][F.cliente]} · ${can} canister(s) · ${carr} carrito(s) · ${status.map(s=>pill(s)).join(' ')}</div></div>
+      <div><div class="mtitle">${razon}</div><div class="msub">Código ${recs[0][F.cliente]} · Zona ${fmtZona(recs[0][F.zona])||'—'} · ${recs[0][F.ejec]||'—'} · ${recs[0][F.grupo]||'—'} · ${can} canister(s) · ${carr} carrito(s) · ${status.map(s=>pill(s)).join(' ')}</div></div>
       <button class="mbtn" id="mFiltrar">Filtrar tablero por este cliente</button>
     </div>
     <div class="mkpis">
@@ -583,6 +700,83 @@ function openModal(razon){
   const mf=document.getElementById('mFiltrar'); if(mf) mf.onclick=()=>{st.cliente=razon; st.view='com'; closeModal(); render();};
 }
 function closeModal(){ const m=document.getElementById('modal'); if(m) m.classList.remove('show'); }
+function openCanisterModal(desc, cod){
+  const recs=DATA.filter(d=>String(d[F.desc])===String(desc));
+  if(!recs.length) return;
+  const tot=k=>recs.reduce((a,d)=>a+num(d[k]),0);
+  const pzs=tot(F.cant), inv=tot(F.inv), fac=tot(F.fact), mar=tot(F.margen);
+  const roi=inv?mar/inv:0;
+  // distribución de ESTE canister por grupo de cliente y por status
+  const gFacM={}; recs.forEach(d=>{const g=d[F.grupo]; if(!g) return; gFacM[g]=(gFacM[g]||0)+num(d[F.fact]);});
+  const sFacM={}; recs.forEach(d=>{const ss=d[F.status]||'—'; sFacM[ss]=(sFacM[ss]||0)+num(d[F.fact]);});
+  const stMapM={}; recs.forEach(d=>{const ss=d[F.status]||'—'; (stMapM[ss]=stMapM[ss]||{n:0,inv:0,fac:0,mar:0}); stMapM[ss].n++; stMapM[ss].inv+=num(d[F.inv]); stMapM[ss].fac+=num(d[F.fact]); stMapM[ss].mar+=num(d[F.margen]);});
+  const resumenStatusHtml = `<div class="card" style="margin-bottom:14px"><h3 style="margin:0 0 8px">📌 Resumen por status</h3>
+    <div class="tbl"><table><thead><tr><th>Status</th><th class="num">Equipos</th><th class="num">Inversión</th><th class="num">Facturación</th><th class="num">Margen</th><th class="num">ROI</th></tr></thead><tbody>
+    ${Object.entries(stMapM).sort((a,b)=>b[1].fac-a[1].fac).map(([k,v])=>`<tr><td>${pill(k)}</td><td class="num">${v.n}</td><td class="num">${fmt(v.inv)}</td><td class="num">${fmt(v.fac)}</td><td class="num">${fmt(v.mar)}</td><td class="num">${roiCell(v.inv?v.mar/v.inv:0)}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  const bolsas=BOLSAS.filter(b=>String(b.codigo_equipo)===String(cod)||String(b.descripcion_equipo)===String(desc))
+                     .sort((a,b)=>num(b.importe_vendido)-num(a.importe_vendido));
+  const bolsasHtml = bolsas.length ? `<div class="tbl"><table><thead><tr>
+      <th>Bolsa</th><th class="num">Clientes</th><th class="num">Bolsas</th><th class="num">Importe</th><th class="num">Margen</th><th class="num">%Margen</th><th class="num">Precio prom</th></tr></thead><tbody>
+      ${bolsas.map(d=>`<tr><td><b>${d.descripcion_consumible||d.codigo_consumible||''}</b></td>
+        <td class="num">${num(d.num_clientes)}</td><td class="num">${num(d.bolsas_facturadas).toLocaleString('es-MX')}</td>
+        <td class="num">${fmt(d.importe_vendido)}</td><td class="num">${fmt(d.margen_total)}</td>
+        <td class="num">${num(d.pct_margen)}%</td><td class="num">${fmt(d.precio_prom_bolsa)}</td></tr>`).join('')}
+      </tbody></table></div>`
+    : '<p class="muted" style="margin:4px 0 0">Sin datos de bolsas para este equipo (conecta v_bolsas_resumen, o es un carrito sin facturación directa).</p>';
+  const cli=[...recs].sort((a,b)=>num(b[F.fact])-num(a[F.fact]));
+  const cliHtml=cli.map(d=>`<tr data-cli="${esc(d[F.razon])}">
+      <td><b>${d[F.razon]||''}</b><br><span class="muted">${d[F.cliente]}</span></td>
+      <td>${fmtZona(d[F.zona])||'—'}</td><td>${d[F.grupo]||'—'}</td>
+      <td class="num">${d[F.cant]||0}</td><td class="num">${fmt(d[F.fact])}</td>
+      <td class="num">${fmt(d[F.margen])}</td><td class="num">${roiCell(d[F.roi])}</td>
+      <td>${pill(d[F.status])}</td><td>${tendIcon(d[F.tend])}</td></tr>`).join('');
+  document.getElementById('modalBody').innerHTML=`
+    <div class="mhead"><div><div class="mtitle">${desc}</div>
+      <div class="msub">Código ${cod} · ${recs.length} clientes · ${pzs.toLocaleString('es-MX')} piezas en comodato</div></div></div>
+    <div class="mkpis">
+      <div class="mk"><div class="l">Inversión comodato</div><div class="v">${fmt(inv)}</div></div>
+      <div class="mk"><div class="l">Facturación</div><div class="v">${fmt(fac)}</div></div>
+      <div class="mk"><div class="l">Margen</div><div class="v">${fmt(mar)}</div><div class="d">${pct(mar,fac)} s/venta</div></div>
+      <div class="mk"><div class="l">ROI</div><div class="v">${roi.toFixed(1)}x</div></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3 style="margin:0 0 8px">📈 Evolución mensual — Facturación vs Comodato (este canister)</h3>
+      <div class="cb" style="height:260px"><canvas id="canTrendCanvas"></canvas></div></div>
+    <div class="card" style="margin-bottom:14px;background:var(--panel2)">
+      <h3 style="margin:0 0 8px">💧 Facturación por bolsa (consumible)</h3>${bolsasHtml}</div>
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h3 style="margin:0 0 8px">🏷️ Facturación por grupo de cliente <span class="hint">(clic filtra)</span></h3><div class="cb" style="height:240px"><canvas id="canGrupoCanvas"></canvas></div></div>
+      <div class="card"><h3 style="margin:0 0 8px">Facturación por status <span class="hint">(clic filtra)</span></h3><div class="cb" style="height:240px"><canvas id="canStatusCanvas"></canvas></div></div>
+    </div>
+    ${resumenStatusHtml}
+    <div class="mtbl"><table><thead><tr>
+      <th>Cliente</th><th>Zona</th><th>Grupo</th><th class="num">Pzs</th><th class="num">Facturación</th><th class="num">Margen</th><th class="num">ROI</th><th>Status</th><th>Tendencia</th>
+    </tr></thead><tbody>${cliHtml}</tbody></table></div>`;
+  document.getElementById('modal').classList.add('show');
+  if(window.__canTrend){try{window.__canTrend.destroy()}catch(e){}}
+  window.__canTrend=drawTrend('canTrendCanvas', null, trend.metric, null, cod);
+  if(window.__canG){try{window.__canG.destroy()}catch(e){}}
+  const gKm=Object.keys(gFacM).sort((a,b)=>gFacM[b]-gFacM[a]);
+  const cgEl=document.getElementById('canGrupoCanvas');
+  if(cgEl && gKm.length) window.__canG=new Chart(cgEl,{type:'bar',
+    data:{labels:gKm,datasets:[{data:gKm.map(k=>gFacM[k]),backgroundColor:'#2f81f7',borderRadius:4}]},
+    options:{...baseOpt,indexAxis:'y',
+      onClick:(e,el)=>{if(el[0]){st.equipo=desc; st.grupo=gKm[el[0].index]; closeModal(); render();}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+fmt(c.parsed.x)}}},scales:axOpt}});
+  if(window.__canS){try{window.__canS.destroy()}catch(e){}}
+  const sKm=Object.keys(sFacM);
+  const csEl=document.getElementById('canStatusCanvas');
+  if(csEl && sKm.length) window.__canS=new Chart(csEl,{type:'doughnut',
+    data:{labels:sKm,datasets:[{data:sKm.map(k=>sFacM[k]),backgroundColor:sKm.map(x=>PAL[x]||'#5a6b7d'),borderColor:'#16212e',borderWidth:2}]},
+    options:{...baseOpt,cutout:'58%',
+      onClick:(e,el)=>{if(el[0]){st.equipo=desc; st.status=sKm[el[0].index]; closeModal(); render();}},
+      plugins:{legend:{position:'right',labels:baseOpt.plugins.legend.labels}}}});
+}
+// drill: clic en un cliente dentro del modal abre su ficha
+document.getElementById('modal').addEventListener('click',e=>{
+  const tr=e.target.closest('#modalBody tr[data-cli]'); if(tr){ openModal(tr.dataset.cli); }
+});
 
 /* ---------- filtros / nav ---------- */
 function buildFilters(){
@@ -595,11 +789,14 @@ function buildFilters(){
     <select id="fRent"><option value="">Rentabilidad</option>${opts(F.rentable)}</select>
     <select id="fTipo"><option value="">Canister/Carrito</option><option>Canister</option><option>Carrito</option></select>
     <select id="fComod"><option value="">Con/Sin comodato</option><option value="con">Con comodato</option><option value="sin">Sin comodato</option></select>
-    ${st.view==='com'?`<select id="fEquipo"><option value="">Equipo</option>${opts(F.desc)}</select>`:''}
+    <select id="fEjec"><option value="">Ejecutivo</option>${opts(F.ejec)}</select>
+    <select id="fZona"><option value="">Zona</option>${[...new Set(DATA.map(d=>fmtZona(d[F.zona])).filter(Boolean))].sort().map(v=>`<option>${v}</option>`).join('')}</select>
+    <select id="fGrupo"><option value="">Grupo cliente</option>${opts(F.grupo)}</select>
+    <select id="fEquipo"><option value="">Equipo / Canister</option>${opts(F.desc)}</select>
     ${st.view==='ger'?`<select id="fRecup"><option value="">Recuperable</option>${opts(F.recup)}</select>`:''}`;
   const q=document.getElementById('q'); q.value=st.q; q.oninput=e=>{st.q=e.target.value; renderChips(); refreshBody();};
   const setv=(id,k)=>{const e=document.getElementById(id); if(e){e.value=st[k]||''; e.onchange=ev=>{st[k]=ev.target.value; render();};}};
-  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fComod','comod');setv('fEquipo','equipo');setv('fRecup','recup');
+  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fComod','comod');setv('fEquipo','equipo');setv('fRecup','recup');setv('fEjec','ejec');setv('fZona','zona');setv('fGrupo','grupo');
 }
 function refreshBody(){ const rows=applyFilters(DATA);
   if(st.view==='dir') renderDir(rows); else if(st.view==='ger') renderGer(rows); else renderCom(rows); }
@@ -610,12 +807,20 @@ function render(){
 }
 /* delegación: clic en fila filtra por cliente; KPI/clicrow filtran por campo */
 document.getElementById('app').addEventListener('click',e=>{
-  const kpi=e.target.closest('.kpi.clic'); if(kpi){st[kpi.dataset.fk]=kpi.dataset.fv; render(); return;}
-  const cr=e.target.closest('tr.clicrow,[data-fk]'); if(cr&&cr.dataset.fk){st[cr.dataset.fk]=cr.dataset.fv; render(); return;}
+  const can=e.target.closest('tr[data-canister]'); if(can){openCanisterModal(can.dataset.canister, can.dataset.cod); return;}
+  const kpi=e.target.closest('.kpi.clic'); if(kpi){const k=kpi.dataset.fk,v=kpi.dataset.fv; st[k]=(st[k]===v?'':v); render(); return;}
+  const cr=e.target.closest('tr.clicrow,[data-fk]'); if(cr&&cr.dataset.fk){const k=cr.dataset.fk,v=cr.dataset.fv; st[k]=(st[k]===v?'':v); render(); return;}
   const tr=e.target.closest('tr[data-cli]'); if(tr){openModal(tr.dataset.cli); return;}
 });
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{st.view=t.dataset.v; render();});
-cargarDatos(); cargarSerie(); setInterval(()=>{cargarDatos(); cargarSerie();}, REFRESH_MS);
+async function cargarBolsas(){
+  if(!DATA_URL) return;
+  const base=DATA_URL+(DATA_URL.includes('?')?'&':'?')+'tab='+encodeURIComponent(BOLSAS_TAB);
+  try{ const r=await fetch(base); const j=await r.json(); if(Array.isArray(j)&&j.length){ BOLSAS=j; if(st.view==='dir') refreshBody(); return; } }catch(e){}
+  try{ const j=await jsonp(base); if(Array.isArray(j)&&j.length){ BOLSAS=j; if(st.view==='dir') refreshBody(); } }catch(e){}
+}
+cargarDatos(); cargarSerie(); cargarBolsas();
+setInterval(()=>{cargarDatos(); cargarSerie(); cargarBolsas();}, REFRESH_MS);
 
 /* cierre del modal */
 document.addEventListener('click',e=>{ if(e.target.id==='modal'||e.target.id==='modalClose') closeModal(); });
