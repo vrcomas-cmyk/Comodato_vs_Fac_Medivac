@@ -147,7 +147,8 @@ const F = {
   impMesAct:'importe_mes_actual'
 };
 
-let DATA = FALLBACK.slice();
+let DATA_ALL = FALLBACK.slice();
+let DATA = DATA_ALL.slice();
 let SERIE = (typeof SERIE_FALLBACK!=='undefined'?SERIE_FALLBACK:[]).slice();
 let BOLSAS = [];
 const codToRazon = {}; const razonToCod = {};
@@ -185,9 +186,9 @@ async function cargarDatos(){
   if(DATA_URL){
     const base=DATA_URL+(DATA_URL.includes('?')?'&':'?')+'tab='+encodeURIComponent(SHEET_TAB);
     try{ const r=await fetch(base); const j=await r.json();
-      if(Array.isArray(j)&&j.length){ DATA=j; setS('en vivo · '+new Date().toLocaleTimeString('es-MX'),true); render(); return; } }catch(e){}
+      if(Array.isArray(j)&&j.length){ DATA_ALL=j; setS('en vivo · '+new Date().toLocaleTimeString('es-MX'),true); render(); return; } }catch(e){}
     try{ const j=await jsonp(base);
-      if(Array.isArray(j)&&j.length){ DATA=j; setS('en vivo (jsonp) · '+new Date().toLocaleTimeString('es-MX'),true); render(); return; } }catch(e){}
+      if(Array.isArray(j)&&j.length){ DATA_ALL=j; setS('en vivo (jsonp) · '+new Date().toLocaleTimeString('es-MX'),true); render(); return; } }catch(e){}
     setS('respaldo (revisa la URL del Apps Script)',false);
   } else { setS('datos embebidos (configura DATA_URL)',false); }
   DATA=FALLBACK.slice(); buildMaps(); render();
@@ -200,7 +201,7 @@ async function cargarSerie(){
 }
 
 /* ---------- estado ---------- */
-const st={view:'dir', q:'', status:'', tend:'', rent:'', equipo:'', recup:'', tipo:'', comod:'', sort:F.razon, dir:1, cliente:''};
+const st={view:'dir', q:'', status:'', tend:'', rent:'', equipo:'', recup:'', tipo:'', comod:'', sort:F.razon, dir:1, cliente:'', pDesde:'', pHasta:''};
 let charts={};
 const distroy=()=>{Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}}); charts={};};
 function uniq(k){return [...new Set(DATA.map(d=>d[k]).filter(v=>v!=null&&v!==''))].sort();}
@@ -284,10 +285,12 @@ function renderChips(){
   add('rent','Rentabilidad',st.rent); add('equipo','Equipo',st.equipo); add('recup','Recuperable',st.recup);
   add('tipo','Tipo',st.tipo); add('comod','Comodato', st.comod==='con'?'Con':(st.comod==='sin'?'Sin':'')); add('q','Buscar',st.q);
   add('ejec','Ejecutivo',st.ejec); add('zona','Zona',st.zona); add('grupo','Grupo',st.grupo);
+  if(st.pDesde||st.pHasta) items.push(`<span class="chip" data-clear="periodo">Periodo: <b>${st.pDesde?lblMes(st.pDesde):'inicio'} → ${st.pHasta?lblMes(st.pHasta):'a la fecha'}</b> ✕</span>`);
   const box=document.getElementById('chips');
   box.innerHTML = items.length ? items.join('')+`<span class="chip clearall" data-clear="ALL">Limpiar todo</span>` : '<span class="muted" style="font-size:11px">Sin filtros · clic en cualquier fila para filtrar por ese cliente</span>';
   box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{const k=c.dataset.clear;
-    if(k==='ALL'){st.cliente=st.q=st.status=st.tend=st.rent=st.equipo=st.recup=st.tipo=st.comod='';}
+    if(k==='ALL'){st.cliente=st.q=st.status=st.tend=st.rent=st.equipo=st.recup=st.tipo=st.comod=st.pDesde=st.pHasta='';}
+    else if(k==='periodo'){st.pDesde=st.pHasta='';}
     else st[k]='';
     render();});
 }
@@ -301,6 +304,31 @@ function dataTable(title, headers, rows, count){
 
 
 /* ---------- gráfica evolución mensual: Facturación vs Comodato ---------- */
+function mesesSerie(){ return [...new Set(SERIE.map(r=>String(r.periodo||'').slice(0,7)).filter(p=>/^\d{4}-\d{2}$/.test(p)))].sort(); }
+function applyPeriod(){
+  if(!st.pDesde && !st.pHasta){ DATA = DATA_ALL.slice(); return; }
+  const lo = st.pDesde||'0000-00', hi = st.pHasta||'9999-99';
+  const agg={};
+  SERIE.forEach(r=>{
+    const p=String(r.periodo||'').slice(0,7); if(!/^\d{4}-\d{2}$/.test(p)) return;
+    if(p<lo||p>hi) return;
+    const k=String(r.cliente)+'|'+String(r.codigo_equipo);
+    (agg[k]=agg[k]||{fac:0,bol:0,mar:0,pz:0});
+    agg[k].fac+=num(r.importe_mes); agg[k].bol+=num(r.bolsas_mes);
+    agg[k].mar+=num(r.margen_mes); agg[k].pz+=num(r.piezas_netas_mes);
+  });
+  DATA = DATA_ALL.map(d=>{
+    const a=agg[String(d[F.cliente])+'|'+String(d[F.mat])];
+    if(!a) return null;
+    const o=Object.assign({}, d);
+    const inv=num(d[F.inv]), cant=num(d[F.cant]);
+    o[F.fact]=a.fac; o[F.bolsas]=a.bol; o[F.margen]=a.mar;
+    o[F.roi]= inv? a.mar/inv : 0;
+    o[F.bpc]= cant? a.bol/cant : 0;
+    o[F.mpc]= cant? a.mar/cant : 0;
+    return o;
+  }).filter(Boolean);
+}
 function serieAgg(cliCod, metric, useFilter, equipoCod){
   let keyset=null, cliset=null;
   if(useFilter){
@@ -321,6 +349,7 @@ function serieAgg(cliCod, metric, useFilter, equipoCod){
   const m={};
   rows.forEach(r=>{
     const p=String(r.periodo||'').slice(0,7); if(!/^\d{4}-\d{2}$/.test(p)) return;
+    if((st.pDesde && p<st.pDesde)||(st.pHasta && p>st.pHasta)) return;
     (m[p]=m[p]||{fac:0,com:0});
     m[p].fac += num(metric==='bolsas'? r.bolsas_mes : r.importe_mes);
     m[p].com += num(r.piezas_netas_mes);
@@ -784,6 +813,8 @@ function buildFilters(){
   const opts=(k)=>uniq(k).map(v=>`<option>${v}</option>`).join('');
   document.getElementById('filterbar').innerHTML=`
     <input id="q" placeholder="🔍 Buscar cliente..." />
+    <select id="pDesde"><option value="">Periodo desde</option>${mesesSerie().map(m=>`<option value="${m}" ${st.pDesde===m?'selected':''}>${lblMes(m)}</option>`).join('')}</select>
+    <select id="pHasta"><option value="">A la fecha</option>${mesesSerie().map(m=>`<option value="${m}" ${st.pHasta===m?'selected':''}>${lblMes(m)}</option>`).join('')}</select>
     <select id="fStatus"><option value="">Status</option>${opts(F.status)}</select>
     <select id="fTend"><option value="">Tendencia</option>${opts(F.tend)}</select>
     <select id="fRent"><option value="">Rentabilidad</option>${opts(F.rentable)}</select>
@@ -796,11 +827,12 @@ function buildFilters(){
     ${st.view==='ger'?`<select id="fRecup"><option value="">Recuperable</option>${opts(F.recup)}</select>`:''}`;
   const q=document.getElementById('q'); q.value=st.q; q.oninput=e=>{st.q=e.target.value; renderChips(); refreshBody();};
   const setv=(id,k)=>{const e=document.getElementById(id); if(e){e.value=st[k]||''; e.onchange=ev=>{st[k]=ev.target.value; render();};}};
-  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fComod','comod');setv('fEquipo','equipo');setv('fRecup','recup');setv('fEjec','ejec');setv('fZona','zona');setv('fGrupo','grupo');
+  setv('fStatus','status');setv('fTend','tend');setv('fRent','rent');setv('fTipo','tipo');setv('fComod','comod');setv('fEquipo','equipo');setv('fRecup','recup');setv('fEjec','ejec');setv('fZona','zona');setv('fGrupo','grupo');setv('pDesde','pDesde');setv('pHasta','pHasta');
 }
 function refreshBody(){ const rows=applyFilters(DATA);
   if(st.view==='dir') renderDir(rows); else if(st.view==='ger') renderGer(rows); else renderCom(rows); }
 function render(){
+  applyPeriod();
   buildMaps();
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===st.view));
   buildFilters(); renderChips(); refreshBody();
