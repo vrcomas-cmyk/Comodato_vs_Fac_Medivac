@@ -165,7 +165,7 @@ function fdate(v){ if(!v) return '—'; const s=String(v);
   return s; }
 const esCarrito = d => d[F.status]==='Complementario' || String(d[F.desc]).toUpperCase().includes('CARRO');
 const tipoEq = d => esCarrito(d) ? 'Carrito' : 'Canister';
-const sinFacturar = d => !esCarrito(d) && num(d[F.fact])===0;  // canister colocado sin venta
+const sinFacturar = d => !esCarrito(d) && !sinComodato(d) && num(d[F.fact])===0;  // canister CON comodato y sin venta (excluye factura-sin-comodato neta 0)
 function sinComodato(d){
   const f = d['Sin comodato asignado'];
   if (f!=null && String(f).trim()!=='') return ['sí','si'].includes(String(f).trim().toLowerCase());
